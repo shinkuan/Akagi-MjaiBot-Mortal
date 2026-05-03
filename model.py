@@ -415,18 +415,21 @@ def sample_top_p(logits, p):
     sampled = probs_idx.gather(-1, probs_sort.multinomial(1)).squeeze(-1)
     return sampled
 
-def load_model(seat: int) -> Bot:
-    # check if GPU is available
+# Module-level engine cache. The PyTorch policy (~100MB on disk) is loaded
+# once on first use and reused for any subsequent Bot — including the
+# throwaway speculator created by `make_speculator`. PyTorch models in
+# eval mode are stateless across `forward` calls, so sharing one engine
+# between multiple Bots is safe.
+_engine: MortalEngine | None = None
+
+
+def _build_engine() -> MortalEngine:
     if torch.cuda.is_available():
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
 
-    # latest binary model
-    control_state_file = "./mortal.pth"
-
-    # Get the path of control_state_file = current directory / control_state_file
-    control_state_file = pathlib.Path(__file__).parent / control_state_file
+    control_state_file = pathlib.Path(__file__).parent / "mortal.pth"
     state = torch.load(control_state_file, map_location=device, weights_only=False)
 
     mortal = Brain(version=state['config']['control']['version'], conv_channels=state['config']['resnet']['conv_channels'], num_blocks=state['config']['resnet']['num_blocks']).eval()
@@ -434,7 +437,7 @@ def load_model(seat: int) -> Bot:
     mortal.load_state_dict(state['mortal'])
     dqn.load_state_dict(state['current_dqn'])
 
-    engine = MortalEngine(
+    return MortalEngine(
         mortal,
         dqn,
         is_oracle = False,
@@ -446,5 +449,21 @@ def load_model(seat: int) -> Bot:
         name = 'mortal',
     )
 
-    bot = Bot(engine, seat)
-    return bot
+
+def _get_engine() -> MortalEngine:
+    global _engine
+    if _engine is None:
+        _engine = _build_engine()
+    return _engine
+
+
+def load_model(seat: int) -> Bot:
+    return Bot(_get_engine(), seat)
+
+
+def make_speculator(seat: int) -> Bot:
+    """Throwaway Bot sharing the cached engine. The caller is responsible
+    for replaying events (with ``can_act=False`` to skip inference) to
+    bring its internal `PlayerState` up to whatever vantage point the
+    speculation needs."""
+    return Bot(_get_engine(), seat)

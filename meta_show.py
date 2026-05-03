@@ -247,12 +247,17 @@ def meta_to_top_show(
     is_3p: bool = False,
     k: int = 3,
     temperature: float = _DEFAULT_TEMPERATURE,
+    speculated_pai: str | None = None,
 ) -> dict:
     """Build the `meta.show` payload from Mortal's q_values + mask_bits.
 
     Returns `{"items": []}` when the meta is missing q_values/mask_bits.
     Otherwise returns `{"title", "items": [...]}` with up to `k` rows
     sorted by descending softmax-scaled score.
+
+    When ``speculated_pai`` is given, the Reach row carries it under
+    ``pais`` so the HUD can render the predicted riichi-discard tile
+    next to the action label.
     """
     q_values = meta.get("q_values")
     mask_bits = meta.get("mask_bits")
@@ -285,7 +290,10 @@ def meta_to_top_show(
     items: list[dict] = []
     for label, score in pairs:
         if label in ("reach",):
-            items.append({"label": "Reach", "value": f"{score * 100:.2f}%"})
+            row: dict = {"label": "Reach", "value": f"{score * 100:.2f}%"}
+            if speculated_pai:
+                row["pais"] = [speculated_pai]
+            items.append(row)
         elif label in ("chi_low", "chi_mid", "chi_high"):
             items.append(_row_for_chi(label, state, score))
         elif label == "pon":
