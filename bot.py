@@ -97,6 +97,13 @@ class Bot:
                 continue
             event_json = json.dumps(e, separators=(",", ":"))
             return_action = self.model.react(event_json)
+            # libriichi clears its internal log at end_kyoku and resets
+            # PlayerState at start_kyoku, so any prior-kyoku events are
+            # dead weight in the speculator's replay. Truncate to the
+            # start_game record (seat assignments) before appending the
+            # new start_kyoku so the log stays bounded across a hanchan.
+            if e["type"] == "start_kyoku":
+                self.event_log = self.event_log[:1]
             # Append after primary react so the speculator replay sees
             # exactly the same event sequence the primary digested.
             self.event_log.append(event_json)
@@ -139,13 +146,23 @@ class Bot:
             # internal `PlayerState` does not diverge if the player
             # ultimately chooses not to riichi.
             if raw_data.get("type") == "reach" and self.player_id is not None:
-                try:
-                    pai = self._peek_reach_dahai()
-                    if pai is not None:
-                        raw_data["pai"] = pai
-                except Exception as exc:
-                    sys.stderr.write(f"reach peek failed: {exc}\n")
+                # Mjai reach is always a self-action — defend against an
+                # upstream bug producing a wrong-seat reach.
+                reach_actor = raw_data.get("actor", self.player_id)
+                if reach_actor != self.player_id:
+                    sys.stderr.write(
+                        f"reach actor {reach_actor} != player_id {self.player_id}; "
+                        "skipping speculation\n"
+                    )
                     sys.stderr.flush()
+                else:
+                    try:
+                        pai = self._peek_reach_dahai()
+                        if pai is not None:
+                            raw_data["pai"] = pai
+                    except Exception as exc:
+                        sys.stderr.write(f"reach peek failed: {exc}\n")
+                        sys.stderr.flush()
             # ========== Online Server =========== #
             if model.ot_settings['online']:
                 if "meta" in raw_data:
@@ -193,6 +210,10 @@ class Bot:
             return None
         dahai = json.loads(peek)
         if dahai.get("type") != "dahai":
+            sys.stderr.write(
+                f"reach peek expected dahai, got {dahai.get('type')!r}\n"
+            )
+            sys.stderr.flush()
             return None
         return dahai.get("pai")
 
