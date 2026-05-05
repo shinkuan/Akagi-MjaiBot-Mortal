@@ -1,0 +1,73 @@
+# Pushes a fresh zip of the branch checkout into the latest GitHub
+# release on every commit:
+#
+#   main → release4p.zip
+#   3p   → release3p.zip
+#
+# Existing assets with the same name are clobbered. Both branches must
+# carry this workflow file — pushes only trigger the workflow that lives
+# on the branch being pushed.
+name: Publish release zip
+
+on:
+  push:
+    branches:
+      - main
+      - 3p
+  # Manual re-run, useful if a release tag was just rotated.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  zip-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Pull LFS-tracked binaries (mortal.pth, libriichi/*.so, etc.)
+          # so they end up inside the zip.
+          lfs: true
+
+      - name: Pick zip name
+        id: pick
+        run: |
+          case "${{ github.ref_name }}" in
+            main) name=release4p.zip ;;
+            3p)   name=release3p.zip ;;
+            *)
+              echo "::error::Unsupported branch: ${{ github.ref_name }}"
+              exit 1
+              ;;
+          esac
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Build zip
+        env:
+          ZIP_NAME: ${{ steps.pick.outputs.name }}
+        run: |
+          # Write to /tmp so `zip -r .` can't recurse into its own output.
+          # Exclude VCS / CI infra and the prior release zips that may be
+          # committed at the repo root, so users get a clean bot bundle.
+          zip -r "/tmp/$ZIP_NAME" . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x "release4p.zip" \
+            -x "release3p.zip" \
+            -x "*/__pycache__/*" \
+            -x "**/.pytest_cache/*"
+          ls -lh "/tmp/$ZIP_NAME"
+
+      - name: Upload to latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ZIP_NAME: ${{ steps.pick.outputs.name }}
+        run: |
+          if ! tag=$(gh release view --json tagName -q .tagName 2>/dev/null); then
+            echo "::error::No release found in this repo. Create one first."
+            exit 1
+          fi
+          echo "Uploading $ZIP_NAME to release $tag"
+          gh release upload "$tag" "/tmp/$ZIP_NAME" --clobber
