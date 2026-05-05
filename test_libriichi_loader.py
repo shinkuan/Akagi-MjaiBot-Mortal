@@ -1,13 +1,8 @@
-"""Regression tests for ``_libriichi_loader``.
+"""Regression tests for ``_libriichi_loader`` (mortal3p variant).
 
-Covers the target-resolution logic so the macOS-on-Linux-binary bug
-cannot silently regress: the loader must pick the right
-``libriichi-{pyver}-{target}.{ext}`` for whichever (system, machine,
-python_version) it is asked about. The actual ``load()`` is not
-exercised here — it would require a matching prebuilt binary for the
-test interpreter — but ``_resolve_target`` and ``_candidate_path``
-fully determine which file ``load()`` would open, so testing them is
-sufficient to catch the regression.
+Mirror of the 4p test — same target-resolution logic, just resolves
+``libriichi3p-{pyver}-{target}.{ext}`` from the ``libriichi3p/``
+subdirectory.
 
 Per CLAUDE.md guideline 8, no real game data is touched.
 """
@@ -53,10 +48,10 @@ def test_resolve_target_unsupported(monkeypatch):
 @pytest.mark.parametrize(
     "system,machine,pyver,expected_filename",
     [
-        ("Darwin",  "arm64",  (3, 12), "libriichi-3.12-aarch64-apple-darwin.so"),
-        ("Darwin",  "x86_64", (3, 11), "libriichi-3.11-x86_64-apple-darwin.so"),
-        ("Linux",   "x86_64", (3, 10), "libriichi-3.10-x86_64-unknown-linux-gnu.so"),
-        ("Windows", "AMD64",  (3, 12), "libriichi-3.12-x86_64-pc-windows-msvc.pyd"),
+        ("Darwin",  "arm64",  (3, 12), "libriichi3p-3.12-aarch64-apple-darwin.so"),
+        ("Darwin",  "x86_64", (3, 11), "libriichi3p-3.11-x86_64-apple-darwin.so"),
+        ("Linux",   "x86_64", (3, 10), "libriichi3p-3.10-x86_64-unknown-linux-gnu.so"),
+        ("Windows", "AMD64",  (3, 12), "libriichi3p-3.12-x86_64-pc-windows-msvc.pyd"),
     ],
 )
 def test_candidate_path(monkeypatch, tmp_path, system, machine, pyver, expected_filename):
@@ -70,18 +65,18 @@ def test_candidate_path(monkeypatch, tmp_path, system, machine, pyver, expected_
         SimpleNamespace(major=pyver[0], minor=pyver[1]),
     )
     candidate = _libriichi_loader._candidate_path(tmp_path)
+    # release3p.zip puts the binaries under ``libriichi/`` even though
+    # the file prefix is ``libriichi3p-`` — the loader follows that.
     assert candidate == tmp_path / "libriichi" / expected_filename
 
 
 def test_real_binary_present_for_current_platform():
     """Sanity: a binary exists in ``libriichi/`` for at least one
-    supported Python minor on the current OS+arch. Catches release-zip
-    layout drift (e.g. someone renames the binaries without updating
-    the loader)."""
+    supported Python minor on the current OS+arch."""
     target, ext = _libriichi_loader._resolve_target()
     libdir = LOADER_DIR / "libriichi"
-    matches = list(libdir.glob(f"libriichi-*-{target}{ext}"))
+    matches = list(libdir.glob(f"libriichi3p-*-{target}{ext}"))
     assert matches, (
-        f"No prebuilt libriichi-*-{target}{ext} in {libdir}; "
+        f"No prebuilt libriichi3p-*-{target}{ext} in {libdir}; "
         "release-zip layout may have drifted."
     )

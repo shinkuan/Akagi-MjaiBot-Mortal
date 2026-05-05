@@ -1,28 +1,27 @@
 manifest_version = 1
 
 [bot]
-name             = "mortal"
-display          = "Mortal"
-description      = "Deep-RL mahjong bot. Wraps libriichi (precompiled) + PyTorch. Optional online inference via API server."
+name             = "mortal3p"
+display          = "Mortal (3P)"
+description      = "Sanma (3P) variant of Mortal — deep-RL mahjong bot for 3-player tables. Wraps libriichi3p (precompiled) + PyTorch."
 version          = "0.1.0"
-supported_modes  = ["4p"]
-
+supported_modes  = ["3p"]
 
 [settings.online]
 type    = "bool"
 label   = "Online Inference"
 default = false
-help    = "When enabled, react_batch is delegated to the API server below. Falls back to local model on request failure."
+help    = "When enabled, react_batch is delegated to the 3p endpoint on the server below. Falls back to local model on request failure."
 
 [settings.server]
 type    = "string"
 label   = "API Server URL"
 default = "http://server.akagiot.org/"
-help    = "Endpoint that exposes /react_batch. Used only when Online Inference is on."
+help    = "Endpoint exposing /react_batch_3p. Used only when Online Inference is on."
 
 [settings.api_key]
 type    = "string"
 label   = "API Key"
 secret  = true
 default = ""
-help    = "Sent in the Authorization header on every /react_batch request."
+help    = "Sent in the Authorization header on every /react_batch_3p request."

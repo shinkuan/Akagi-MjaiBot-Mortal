@@ -1,13 +1,13 @@
 import json
 import sys
 
-# Loader runs first so ``libriichi`` resolves to the right prebuilt
+# Loader runs first so ``libriichi3p`` resolves to the right prebuilt
 # extension regardless of import order with ``model``.
 import _libriichi_loader
 
 _libriichi_loader.load()
 import model
-from libriichi.state import PlayerState  # type: ignore[import-not-found]
+from libriichi3p.state import PlayerState  # type: ignore[import-not-found]
 from meta_show import meta_to_top_show
 
 class Bot:
@@ -15,9 +15,12 @@ class Bot:
         self.player_id: int = None
         self.model = None
         self.state: PlayerState | None = None
-        # Raw mjai event JSON strings since the most recent `start_game`,
-        # used to seed a throwaway speculator Bot when peeking at the
-        # post-`reach` dahai (see `_peek_reach_dahai`).
+        # Raw mjai event JSON strings (post-conversion to libriichi3p shape)
+        # since the most recent `start_game`. Used to seed a throwaway
+        # speculator Bot when peeking at the post-`reach` dahai (see
+        # `_peek_reach_dahai`). The replay must mirror exactly what the
+        # primary `self.model` consumed, so we capture events AFTER the
+        # Akagi-V3-native → libriichi3p conversion at the top of `react`.
         self.event_log: list[str] = []
         # ========== Online Server =========== #
         model.online_settings_init()
@@ -36,54 +39,41 @@ class Bot:
         :param events: JSON string of events
         :return: JSON string of action
 
-        Example:
-        ```
-        bot = Bot()
-        res = bot.react('[{"type":"start_game","names":["0","1","2","3"],"id":0}]')
-        # res == '{"type":"none"}'
-
-        events = str([
-            {
-                "type":"start_kyoku",
-                "bakaze":"S",
-                "dora_marker":"1p",
-                "kyoku":2,"honba":2,
-                "kyotaku":0,
-                "oya":1,
-                "scores":[800,61100,11300,26800],
-                "tehais":[
-                    ["4p","4s","P","3p","1p","5s","2m","F","1m","7s","9m","6m","9s"],
-                    ["?","?","?","?","?","?","?","?","?","?","?","?","?"],
-                    ["?","?","?","?","?","?","?","?","?","?","?","?","?"],
-                    ["?","?","?","?","?","?","?","?","?","?","?","?","?"]
-                ]
-            },
-            {"type":"tsumo","actor":1,"pai":"?"},
-            {"type":"dahai","actor":1,"pai":"F","tsumogiri":false},
-            {"type":"tsumo","actor":2,"pai":"?"},
-            {"type":"dahai","actor":2,"pai":"3m","tsumogiri":true},
-            {"type":"tsumo","actor":3,"pai":"?"},
-            {"type":"dahai","actor":3,"pai":"1m","tsumogiri":true},
-            {"type":"tsumo","actor":0,"pai":"3s"}
-        ])
-
-        res = bot.react(events)
-        # res == '{"type":"dahai","pai":"3s","actor":0,"tsumogiri":true}'
-        ...        
-        res = bot.react('[{"type":"start_game","names":["0","1","2","3"],"id":3}]')
-        # res == '{"type":"none"}'
-        ...
-        ```
-
         For more information, please refer to https://github.com/smly/mjai.app
+
+        # 3-player adaptation note (Akagi V3)
+        Akagi V3 emits native 3p mjai (length-3 `scores` / `tehais` / `deltas`
+        and `kita` events). The libriichi3p-mjai bot consumes the historical
+        4-player-padded shape with `nukidora` instead of `kita`. We translate
+        on the way in (length-3 → length-4 with dummy seat 3, kita → nukidora)
+        and on the way out (nukidora → kita).
         """
         try:
             events = json.loads(events)
         except json.JSONDecodeError as e:
+            sys.stderr.write(f"mortal3p: failed to parse events: {e}\n")
+            sys.stderr.flush()
             return json.dumps({"type":"none"}, separators=(",", ":"))
 
         return_action = None
         for e in events:
+            # ========== Akagi V3 native 3p → libriichi3p convert ========== #
+            if e['type'] == 'start_kyoku':
+                # Pad scores/tehais to length 4 (libriichi3p expects the
+                # legacy 4p-shaped event with seat 3 as a dummy).
+                e['scores'].append(0)
+                e['tehais'].append(["?","?","?","?","?","?","?","?","?","?","?","?","?"])
+            if e['type'] == 'kita':
+                e = {
+                    'type': 'nukidora',
+                    'actor': e['actor'],
+                    'pai': 'N',
+                }
+            if 'deltas' in e and isinstance(e['deltas'], list) and len(e['deltas']) == 3:
+                # hora / ryukyoku deltas — pad seat 3 with 0.
+                e['deltas'].append(0)
+            # ============================================================== #
+
             if e["type"] == "start_game":
                 self.player_id = e["id"]
                 self.model = model.load_model(self.player_id)
@@ -93,6 +83,8 @@ class Bot:
                 self.event_log = [json.dumps(e, separators=(",", ":"))]
                 continue
             if self.model is None or self.player_id is None:
+                sys.stderr.write("mortal3p: model not loaded; ignoring event\n")
+                sys.stderr.flush()
                 continue
             if e["type"] == "end_game":
                 self.player_id = None
@@ -102,7 +94,7 @@ class Bot:
                 continue
             event_json = json.dumps(e, separators=(",", ":"))
             return_action = self.model.react(event_json)
-            # libriichi clears its internal log at end_kyoku and resets
+            # libriichi3p clears its internal log at end_kyoku and resets
             # PlayerState at start_kyoku, so any prior-kyoku events are
             # dead weight in the speculator's replay. Truncate to the
             # start_game record (seat assignments) before appending the
@@ -112,15 +104,14 @@ class Bot:
             # Append after primary react so the speculator replay sees
             # exactly the same event sequence the primary digested.
             self.event_log.append(event_json)
-            # Mirror the bot's view of the game on a parallel PlayerState
-            # so we can resolve chi/pon/kan/hora tiles for `meta.show`.
-            # Failures here must never poison the action returned to the
-            # host — log + continue.
+            # Feed the same (post-conversion) events to a parallel
+            # PlayerState — needed to resolve chi/pon/kan/hora tiles for
+            # `meta.show`. Failure must never block the action.
             if self.state is not None:
                 try:
                     self.state.update(event_json)
                 except Exception as exc:
-                    sys.stderr.write(f"player_state.update failed: {exc}\n")
+                    sys.stderr.write(f"mortal3p: player_state.update failed: {exc}\n")
                     sys.stderr.flush()
 
         if return_action is None:
@@ -129,7 +120,7 @@ class Bot:
                 raw_data = {
                     "type":"none",
                     "meta": {
-                        "online": model.is_online
+                        "online": model.is_online,
                     }
                 }
                 return_action = json.dumps(raw_data, separators=(",", ":"))
@@ -156,8 +147,8 @@ class Bot:
                 reach_actor = raw_data.get("actor", self.player_id)
                 if reach_actor != self.player_id:
                     sys.stderr.write(
-                        f"reach actor {reach_actor} != player_id {self.player_id}; "
-                        "skipping speculation\n"
+                        f"mortal3p: reach actor {reach_actor} != player_id "
+                        f"{self.player_id}; skipping speculation\n"
                     )
                     sys.stderr.flush()
                 else:
@@ -166,7 +157,7 @@ class Bot:
                         if pai is not None:
                             raw_data["pai"] = pai
                     except Exception as exc:
-                        sys.stderr.write(f"reach peek failed: {exc}\n")
+                        sys.stderr.write(f"mortal3p: reach peek failed: {exc}\n")
                         sys.stderr.flush()
             # ========== Online Server =========== #
             if model.ot_settings['online']:
@@ -175,8 +166,9 @@ class Bot:
                 else:
                     raw_data["meta"] = {"online": model.is_online}
             # ==================================== #
-            # Top-3 from q_values + mask_bits → meta.show. Skipped when
-            # the bot didn't emit q_values (e.g. degenerate `none`).
+            # Top-3 from q_values + mask_bits → meta.show. Compute
+            # before the nukidora→kita rename so the meta survives the
+            # conversion path.
             meta = raw_data.get("meta")
             if meta and "q_values" in meta and "mask_bits" in meta and self.state is not None:
                 try:
@@ -184,14 +176,22 @@ class Bot:
                     show = meta_to_top_show(
                         meta,
                         self.state,
-                        is_3p=False,
+                        is_3p=True,
                         speculated_pai=speculated_pai,
                     )
                     if show.get("items"):
                         meta["show"] = show
                 except Exception as exc:
-                    sys.stderr.write(f"meta_to_top_show failed: {exc}\n")
+                    sys.stderr.write(f"mortal3p: meta_to_top_show failed: {exc}\n")
                     sys.stderr.flush()
+
+            # ========== libriichi3p → Akagi V3 native 3p convert ========== #
+            if raw_data.get('type') == 'nukidora':
+                converted = {'type': 'kita', 'actor': raw_data['actor']}
+                if 'meta' in raw_data:
+                    converted['meta'] = raw_data['meta']
+                raw_data = converted
+            # ============================================================== #
             return json.dumps(raw_data, separators=(",", ":"))
 
     def _peek_reach_dahai(self) -> str | None:
@@ -216,11 +216,12 @@ class Bot:
         dahai = json.loads(peek)
         if dahai.get("type") != "dahai":
             sys.stderr.write(
-                f"reach peek expected dahai, got {dahai.get('type')!r}\n"
+                f"mortal3p: reach peek expected dahai, got {dahai.get('type')!r}\n"
             )
             sys.stderr.flush()
             return None
         return dahai.get("pai")
+
 
 def main() -> None:
     bot = Bot()
@@ -231,7 +232,7 @@ def main() -> None:
         try:
             resp = bot.react(line)
         except Exception as e:  # never crash the loop
-            sys.stderr.write(f"bot error: {e}\n")
+            sys.stderr.write(f"mortal3p error: {e}\n")
             sys.stderr.flush()
             resp = json.dumps({"type": "none"}, separators=(",", ":"))
         sys.stdout.write(resp + "\n")

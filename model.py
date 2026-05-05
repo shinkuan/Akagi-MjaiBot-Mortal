@@ -8,9 +8,10 @@ import requests
 import traceback
 import numpy as np
 
-# Picks the per-OS / per-arch / per-Python prebuilt libriichi from
-# ``libriichi/`` and registers it in ``sys.modules`` before the import
-# below resolves. Must run before any ``from libriichi... import ...``.
+# Picks the per-OS / per-arch / per-Python prebuilt libriichi3p from
+# the ``libriichi/`` subdir (release3p.zip layout — subdir name lacks
+# the 3p suffix) and registers it in ``sys.modules`` before the import
+# below resolves. Must run before any ``from libriichi3p... import ...``.
 import _libriichi_loader
 
 _libriichi_loader.load()
@@ -22,8 +23,8 @@ from torch.distributions import Normal, Categorical
 from typing import *
 from functools import partial
 from itertools import permutations
-from libriichi.mjai import Bot
-from libriichi.consts import obs_shape, oracle_obs_shape, ACTION_SPACE, GRP_SIZE
+from libriichi3p.mjai import Bot
+from libriichi3p.consts import obs_shape, oracle_obs_shape, ACTION_SPACE, GRP_SIZE
 
 # ========== Online Server =========== #
 OT_REQUEST_TIMEOUT = 2
@@ -59,7 +60,7 @@ def online_settings_init():
             return
         except Exception as e:
             print(
-                f"[mortal] failed to read AKAGI_BOT_CONFIG ({cfg_path}): {e}",
+                f"[mortal3p] failed to read AKAGI_BOT_CONFIG ({cfg_path}): {e}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -71,7 +72,7 @@ def online_settings_init():
                 ot_settings.update(json.load(f))
         except Exception as e:
             print(
-                f"[mortal] failed to read legacy ot_settings.json: {e}",
+                f"[mortal3p] failed to read legacy ot_settings.json: {e}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -356,7 +357,7 @@ class MortalEngine:
                     'Content-Encoding': 'gzip',
                 }
                 r = requests.post(
-                    f'{ot_settings["server"]}/react_batch',
+                    f'{ot_settings["server"]}/react_batch_3p',
                     headers=headers,
                     data=compressed_data,
                     timeout=OT_REQUEST_TIMEOUT
@@ -422,11 +423,11 @@ def sample_top_p(logits, p):
     sampled = probs_idx.gather(-1, probs_sort.multinomial(1)).squeeze(-1)
     return sampled
 
-# Module-level engine cache. The PyTorch policy (~100MB on disk) is loaded
-# once on first use and reused for any subsequent Bot — including the
-# throwaway speculator created by `make_speculator`. PyTorch models in
-# eval mode are stateless across `forward` calls, so sharing one engine
-# between multiple Bots is safe.
+# Module-level engine cache. The PyTorch policy is loaded once on first
+# use and reused for any subsequent Bot — including the throwaway
+# speculator created by `make_speculator` (used by bot.py to peek the
+# post-reach dahai). PyTorch models in eval mode are stateless across
+# `forward`, so sharing one engine between multiple Bots is safe.
 _engine: MortalEngine | None = None
 
 
@@ -453,7 +454,7 @@ def _build_engine() -> MortalEngine:
         enable_amp = False,
         enable_quick_eval = False,
         enable_rule_based_agari_guard = True,
-        name = 'mortal',
+        name = 'mortal3p',
     )
 
 

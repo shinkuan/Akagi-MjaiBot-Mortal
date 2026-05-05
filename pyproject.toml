@@ -1,7 +1,7 @@
 [project]
-name = "mortal-bot"
+name = "mortal3p-bot"
 version = "0.1.0"
-description = "Mortal RL mahjong bot — wraps libriichi (precompiled) + PyTorch"
+description = "Mortal RL mahjong bot — sanma (3P) variant. Wraps libriichi3p (precompiled) + PyTorch."
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "torch<2.9",

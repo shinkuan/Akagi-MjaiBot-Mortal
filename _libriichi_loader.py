@@ -1,12 +1,12 @@
 """Detect OS / architecture / Python version and load the matching
-prebuilt ``libriichi`` extension from the ``libriichi/`` subdirectory
+prebuilt ``libriichi3p`` extension from the ``libriichi/`` subdirectory
 next to this file.
 
-The legacy layout shipped a single top-level ``libriichi.so`` /
-``libriichi.pyd`` (Linux x86_64 only), which silently fails on macOS
+The legacy layout shipped a single top-level ``libriichi3p.so`` /
+``libriichi3p.pyd`` (Linux x86_64 only), which silently fails on macOS
 because the binary is for the wrong OS. ``load()`` registers the right
-per-platform binary in ``sys.modules['libriichi']`` *before* any
-``from libriichi... import ...`` statement in ``model.py`` / ``bot.py``,
+per-platform binary in ``sys.modules['libriichi3p']`` *before* any
+``from libriichi3p... import ...`` statement in ``model.py`` / ``bot.py``,
 so the standard import machinery never gets to the (possibly wrong)
 top-level fallback.
 
@@ -14,8 +14,12 @@ Callers must invoke ``load()`` explicitly — the module performs no
 side effects at import time so it stays unit-testable on interpreters
 that lack a matching prebuilt binary.
 
-Naming convention in ``libriichi/`` (matches release4p.zip layout):
-``libriichi-{py_major}.{py_minor}-{rust_target_triple}.{so|pyd}``
+Layout note: this bot's prebuilt binaries live under ``libriichi/``
+(no ``3p`` suffix on the directory), but the file names themselves
+use the ``libriichi3p-`` prefix — that's the release3p.zip convention.
+
+Naming convention in ``libriichi/`` (matches release3p.zip layout):
+``libriichi3p-{py_major}.{py_minor}-{rust_target_triple}.{so|pyd}``
 """
 from __future__ import annotations
 
@@ -25,7 +29,8 @@ import platform
 import sys
 from pathlib import Path
 
-_NAME = "libriichi"
+_NAME = "libriichi3p"
+_SUBDIR = "libriichi"
 
 
 def _resolve_target() -> tuple[str, str]:
@@ -46,7 +51,7 @@ def _resolve_target() -> tuple[str, str]:
 def _candidate_path(here: Path) -> Path:
     target, ext = _resolve_target()
     pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
-    return here / _NAME / f"{_NAME}-{pyver}-{target}{ext}"
+    return here / _SUBDIR / f"{_NAME}-{pyver}-{target}{ext}"
 
 
 def load() -> None:

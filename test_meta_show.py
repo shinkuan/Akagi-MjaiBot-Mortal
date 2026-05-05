@@ -165,35 +165,42 @@ def test_reach_row_carries_speculated_pai():
     Bot._peek_reach_dahai in bot.py) and passes the predicted tile via
     `speculated_pai`, the Reach row in the top-K display must surface
     it under `pais` so the HUD can render mahgen alongside the action
-    label. Without `speculated_pai`, the Reach row stays label-only."""
+    label. Without `speculated_pai`, the Reach row stays label-only.
+
+    Covers both 3p (is_3p=True, the native mode for this wrapper) and
+    4p (is_3p=False, sanity check that the kwarg threads identically
+    through the shared label table)."""
 
     # mask: only "reach" (bit 37) — minimal scenario where the bot picks
-    # reach. q_values length must equal popcount(mask).
+    # reach. q_values length must equal popcount(mask). Bit 37 = "reach"
+    # in both 3p and 4p label tables.
     meta = {"q_values": [1.0], "mask_bits": 1 << 37}
     state = _empty_state()
 
-    # Without speculation: reach row, no pais.
-    show = meta_show.meta_to_top_show(meta, state, is_3p=False, k=1)
-    assert len(show["items"]) == 1
-    item = show["items"][0]
-    assert item["label"] == "Reach"
-    assert "pais" not in item
+    for is_3p in (True, False):
+        # Without speculation: reach row, no pais.
+        show = meta_show.meta_to_top_show(meta, state, is_3p=is_3p, k=1)
+        assert len(show["items"]) == 1, f"is_3p={is_3p}"
+        item = show["items"][0]
+        assert item["label"] == "Reach", f"is_3p={is_3p}"
+        assert "pais" not in item, f"is_3p={is_3p}"
 
-    # With speculation: reach row carries the predicted discard tile.
-    show = meta_show.meta_to_top_show(
-        meta, state, is_3p=False, k=1, speculated_pai="3p"
-    )
-    item = show["items"][0]
-    assert item["label"] == "Reach"
-    assert item["pais"] == ["3p"]
-
-    # Empty / None speculated_pai should not add the pais key — guards
-    # against a bot wrapper that sets speculated_pai='' on a peek miss.
-    for falsy in (None, ""):
+        # With speculation: reach row carries the predicted discard tile.
         show = meta_show.meta_to_top_show(
-            meta, state, is_3p=False, k=1, speculated_pai=falsy
+            meta, state, is_3p=is_3p, k=1, speculated_pai="3p"
         )
-        assert "pais" not in show["items"][0]
+        item = show["items"][0]
+        assert item["label"] == "Reach", f"is_3p={is_3p}"
+        assert item["pais"] == ["3p"], f"is_3p={is_3p}"
+
+        # Empty / None speculated_pai should not add the pais key —
+        # guards against a bot wrapper that sets speculated_pai='' on
+        # a peek miss.
+        for falsy in (None, ""):
+            show = meta_show.meta_to_top_show(
+                meta, state, is_3p=is_3p, k=1, speculated_pai=falsy
+            )
+            assert "pais" not in show["items"][0], f"is_3p={is_3p}, falsy={falsy!r}"
 
 
 if __name__ == "__main__":
