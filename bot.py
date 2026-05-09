@@ -7,14 +7,17 @@ import _libriichi_loader
 
 _libriichi_loader.load()
 import model
-from libriichi3p.state import PlayerState  # type: ignore[import-not-found]
 from meta_show import meta_to_top_show
+
+
+def _sanitize(s: str) -> str:
+    """Replace lone surrogates in a JSON string so json.loads won't choke."""
+    return s.encode('utf-8', 'surrogatepass').decode('utf-8', 'replace')
 
 class Bot:
     def __init__(self):
         self.player_id: int = None
         self.model = None
-        self.state: PlayerState | None = None
         # Raw mjai event JSON strings (post-conversion to libriichi3p shape)
         # since the most recent `start_game`. Used to seed a throwaway
         # speculator Bot when peeking at the post-`reach` dahai (see
@@ -49,7 +52,7 @@ class Bot:
         and on the way out (nukidora → kita).
         """
         try:
-            events = json.loads(events)
+            events = json.loads(_sanitize(events))
         except json.JSONDecodeError as e:
             sys.stderr.write(f"mortal3p: failed to parse events: {e}\n")
             sys.stderr.flush()
@@ -61,14 +64,15 @@ class Bot:
             if e['type'] == 'start_kyoku':
                 # Pad scores/tehais to length 4 (libriichi3p expects the
                 # legacy 4p-shaped event with seat 3 as a dummy).
-                e['scores'].append(0)
-                e['tehais'].append(["?","?","?","?","?","?","?","?","?","?","?","?","?"])
+                # Guard with length check in case Akagi ever sends pre-padded events.
+                if isinstance(e.get('scores'), list) and len(e['scores']) == 3:
+                    e['scores'].append(0)
+                if isinstance(e.get('tehais'), list) and len(e['tehais']) == 3:
+                    e['tehais'].append(["?","?","?","?","?","?","?","?","?","?","?","?","?"])
             if e['type'] == 'kita':
-                e = {
-                    'type': 'nukidora',
-                    'actor': e['actor'],
-                    'pai': 'N',
-                }
+                # Preserve any extra fields (e.g. mouted) to avoid silent data loss,
+                # then remap type and tile to the nukidora shape.
+                e = {**e, 'type': 'nukidora', 'pai': 'N'}
             if 'deltas' in e and isinstance(e['deltas'], list) and len(e['deltas']) == 3:
                 # hora / ryukyoku deltas — pad seat 3 with 0.
                 e['deltas'].append(0)
@@ -77,10 +81,23 @@ class Bot:
             if e["type"] == "start_game":
                 self.player_id = e["id"]
                 self.model = model.load_model(self.player_id)
-                self.state = PlayerState(self.player_id)
+                # Sanitize names before storing so the speculator replay
+                # never sees lone surrogates when it replays event_log.
+                if "names" in e:
+                    e["names"] = [
+                        _sanitize(n) if isinstance(n, str) else n
+                        for n in e["names"]
+                    ]
+                # Pad names and num_players to length 4 for the speculator
+                # replay — libriichi3p expects the legacy 4p-shaped start_game.
+                e_log = dict(e)
+                if isinstance(e_log.get("names"), list) and len(e_log["names"]) == 3:
+                    e_log["names"] = e_log["names"] + [""]
+                if e_log.get("num_players") == 3:
+                    e_log["num_players"] = 4
                 # Reset speculator log; capture the start_game event so a
                 # speculator spawned later can be replayed from this point.
-                self.event_log = [json.dumps(e, separators=(",", ":"))]
+                self.event_log = [json.dumps(e_log, separators=(",", ":"))]
                 continue
             if self.model is None or self.player_id is None:
                 sys.stderr.write("mortal3p: model not loaded; ignoring event\n")
@@ -89,8 +106,8 @@ class Bot:
             if e["type"] == "end_game":
                 self.player_id = None
                 self.model = None
-                self.state = None
                 self.event_log = []
+                return_action = json.dumps({"type":"none"}, separators=(",", ":"))
                 continue
             event_json = json.dumps(e, separators=(",", ":"))
             return_action = self.model.react(event_json)
@@ -101,18 +118,12 @@ class Bot:
             # new start_kyoku so the log stays bounded across a hanchan.
             if e["type"] == "start_kyoku":
                 self.event_log = self.event_log[:1]
-            # Append after primary react so the speculator replay sees
-            # exactly the same event sequence the primary digested.
+            # Append BEFORE the reach peek so the speculator replay
+            # includes the tsumo that triggered the reach decision.
+            # (Previously appended after, meaning the triggering tsumo
+            # was missing from the log and the speculator couldn't pick
+            # a dahai — resulting in pai=None and autoplay stalling.)
             self.event_log.append(event_json)
-            # Feed the same (post-conversion) events to a parallel
-            # PlayerState — needed to resolve chi/pon/kan/hora tiles for
-            # `meta.show`. Failure must never block the action.
-            if self.state is not None:
-                try:
-                    self.state.update(event_json)
-                except Exception as exc:
-                    sys.stderr.write(f"mortal3p: player_state.update failed: {exc}\n")
-                    sys.stderr.flush()
 
         if return_action is None:
             # ========== Online Server =========== #
@@ -170,12 +181,15 @@ class Bot:
             # before the nukidora→kita rename so the meta survives the
             # conversion path.
             meta = raw_data.get("meta")
-            if meta and "q_values" in meta and "mask_bits" in meta and self.state is not None:
+            if meta and "q_values" in meta and "mask_bits" in meta:
                 try:
+                    # Use the internal state maintained by libriichi3p's Bot
+                    # directly — libriichi3p has no separate PlayerState.update().
+                    bot_state = getattr(self.model, "state", None)
                     speculated_pai = raw_data.get("pai") if raw_data.get("type") == "reach" else None
                     show = meta_to_top_show(
                         meta,
-                        self.state,
+                        bot_state,
                         is_3p=True,
                         speculated_pai=speculated_pai,
                     )
