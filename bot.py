@@ -10,6 +10,11 @@ import model
 from libriichi.state import PlayerState  # type: ignore[import-not-found]
 from meta_show import meta_to_top_show
 
+
+def _sanitize(s: str) -> str:
+    """Replace lone surrogates in a JSON string so json.loads won't choke."""
+    return s.encode('utf-8', 'surrogatepass').decode('utf-8', 'replace')
+
 class Bot:
     def __init__(self):
         self.player_id: int = None
@@ -78,7 +83,7 @@ class Bot:
         For more information, please refer to https://github.com/smly/mjai.app
         """
         try:
-            events = json.loads(events)
+            events = json.loads(_sanitize(events))
         except json.JSONDecodeError as e:
             return json.dumps({"type":"none"}, separators=(",", ":"))
 
@@ -88,6 +93,13 @@ class Bot:
                 self.player_id = e["id"]
                 self.model = model.load_model(self.player_id)
                 self.state = PlayerState(self.player_id)
+                # Sanitize names before storing so the speculator replay
+                # never sees lone surrogates when it replays event_log.
+                if "names" in e:
+                    e["names"] = [
+                        _sanitize(n) if isinstance(n, str) else n
+                        for n in e["names"]
+                    ]
                 # Reset speculator log; capture the start_game event so a
                 # speculator spawned later can be replayed from this point.
                 self.event_log = [json.dumps(e, separators=(",", ":"))]
@@ -99,6 +111,7 @@ class Bot:
                 self.model = None
                 self.state = None
                 self.event_log = []
+                return_action = json.dumps({"type":"none"}, separators=(",", ":"))
                 continue
             event_json = json.dumps(e, separators=(",", ":"))
             return_action = self.model.react(event_json)
@@ -109,8 +122,11 @@ class Bot:
             # new start_kyoku so the log stays bounded across a hanchan.
             if e["type"] == "start_kyoku":
                 self.event_log = self.event_log[:1]
-            # Append after primary react so the speculator replay sees
-            # exactly the same event sequence the primary digested.
+            # Append BEFORE the reach peek so the speculator replay
+            # includes the tsumo that triggered the reach decision.
+            # (Previously appended after, meaning the triggering tsumo
+            # was missing from the log and the speculator couldn't pick
+            # a dahai — resulting in pai=None and autoplay stalling.)
             self.event_log.append(event_json)
             # Mirror the bot's view of the game on a parallel PlayerState
             # so we can resolve chi/pon/kan/hora tiles for `meta.show`.
