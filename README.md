@@ -87,6 +87,23 @@ to local inference" — distinct from the *setting* `online: false` which
 means "always use local". Other custom keys can be added without any
 backend change since `meta` is a free-form JSON object.
 
+### Connection-status toasts
+
+On top of the per-response `meta.online` flag, Mortal pushes a toast to
+the Akagi UI when the online-server connection *changes state* (via the
+host's `@@AKAGI_NOTIFY@@` stderr notification protocol):
+
+- **offline → online** — a *success* toast ("Connected to online
+  server"). Fires on the first successful server call and again after any
+  reconnect.
+- **online → offline** — a *warn* toast ("Disconnected from online
+  server" / falling back to the local model).
+
+A steady state emits nothing — in particular, a first-ever *failed*
+connection is silent. The transition logic and the notification helper
+live in [`online_status.py`](online_status.py) (kept import-light so it's
+unit-tested by `test_online_status.py` without loading torch).
+
 ---
 
 ## Install
