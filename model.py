@@ -8,6 +8,8 @@ import requests
 import traceback
 import numpy as np
 
+from online_status import notify as _notify, online_status_notification
+
 # Picks the per-OS / per-arch / per-Python prebuilt libriichi from
 # ``libriichi/`` and registers it in ``sys.modules`` before the import
 # below resolves. Must run before any ``from libriichi... import ...``.
@@ -33,6 +35,15 @@ ot_settings = {
     "api_key": "example_api_key",
 }
 is_online = False
+
+def _update_online_status(new_online):
+    """Flip the module ``is_online`` flag, emitting a connect/disconnect toast
+    on an edge (offline→online or online→offline). No-op on a steady state."""
+    global is_online
+    kwargs = online_status_notification(is_online, new_online, ot_settings.get('server'))
+    if kwargs is not None:
+        _notify(**kwargs)
+    is_online = new_online
 
 def online_settings_init():
     """Resolve online-server settings from (in order):
@@ -340,7 +351,7 @@ class MortalEngine:
 
     def react_batch(self, obs, masks, invisible_obs):
         # ========== Online Server =========== #
-        global ot_settings, is_online
+        global ot_settings
         if ot_settings['online']:
             try:
                 list_obs = [o.tolist() for o in obs]
@@ -362,11 +373,14 @@ class MortalEngine:
                     timeout=OT_REQUEST_TIMEOUT
                 )
                 assert r.status_code == 200
-                is_online = True
                 r_json = r.json()
-                return r_json['actions'], r_json['q_out'], r_json['masks'], r_json['is_greedy']
+                result = r_json['actions'], r_json['q_out'], r_json['masks'], r_json['is_greedy']
+                # Only mark online once the response fully parses, so a 200
+                # with a malformed body doesn't flicker connected→disconnected.
+                _update_online_status(True)
+                return result
             except:
-                is_online = False
+                _update_online_status(False)
                 pass
         # ==================================== #
         try:
